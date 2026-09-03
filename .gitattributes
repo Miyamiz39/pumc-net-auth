@@ -1,0 +1,3 @@
+# 排除辅助脚本的语言统计，确保项目主语言正确识别为 Go
+python/** linguist-vendored
+build.bat linguist-vendored
