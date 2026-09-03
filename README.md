@@ -4,9 +4,13 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6?style=flat)](https://github.com/Miyamiz39/pumc-net-auth/releases)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-通用深澜 Srun Portal 网关校园网自动登录、掉线重连与后台保活客户端（适用采用深澜认证的高校，如 PUMC 等）。
+PUMC 校园网（深澜 Srun Portal 网关）自动登录、掉线重连与后台保活客户端（也适用采用其它深澜认证的高校）。
 
 ---
+
+*在宿舍里的主机又被校园网踢下线了！远程桌面又双叒连不上了* ヽ(`Д´)ﾉ
+
+**于是有了这个程序 ( •̀ ω •́ )✧**
 
 ## 特性
 
@@ -99,9 +103,10 @@ go build -ldflags="-s -w" -o pumc-net-auth .
 
 ```json
 {
-  "username": "your_username",
-  "password": "your_password",
-  "portal_host": "portal.your-campus.edu.cn",
+  "username": "your_username", //用户名 (学号, etc.)
+  "password": "your_password", //密码 (明文保存所以千万注意文件保密！)
+  "portal_host": "portal.your-campus.edu.cn", //校园网认证页面的地址
+// 以下保持默认即可
   "ac_id": 1,
   "keepalive_target": "www.baidu.com",
   "interval_seconds": 30,
@@ -112,7 +117,7 @@ go build -ldflags="-s -w" -o pumc-net-auth .
 }
 ```
 
-> *注：对于北京协和医学院，`portal_host` 为 `go.pumc.edu.cn`。配置文件亦可放置于 `~/.pumc-net-auth/config.json`。*
+> *注：对于PUMC，`portal_host` 为 `go.pumc.edu.cn`。配置文件亦可放置于 `~/.pumc-net-auth/config.json`。*
 
 ### 3. 命令行操作
 
