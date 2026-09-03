@@ -2,6 +2,8 @@
 config.json
 
 # 编译二进制与临时输出
+dist/
+pumc-net-auth-*
 *.exe
 *.exe~
 *.dll

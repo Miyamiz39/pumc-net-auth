@@ -7,20 +7,11 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
-
-func init() {
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	attachConsole := kernel32.NewProc("AttachConsole")
-	// 尝试附加到父进程控制台（若从终端运行则能看到输出，若双击/自启则保持无窗口）
-	_, _, _ = attachConsole.Call(uintptr(0xFFFFFFFF))
-}
 
 // Config 配置结构
 type Config struct {
@@ -264,8 +255,7 @@ func cmdStop() {
 		fmt.Printf("无效的 PID: %s\n", pidStr)
 		return
 	}
-	cmd := exec.Command("taskkill", "/F", "/PID", strconv.Itoa(pid))
-	_ = cmd.Run()
+	_ = killProcess(pid)
 	_ = os.Remove(pidFile)
 	fmt.Printf("已终止后台进程 pid=%d\n", pid)
 }
@@ -278,9 +268,7 @@ func cmdStatus() {
 	}
 	pidStr := strings.TrimSpace(string(data))
 	pid, _ := strconv.Atoi(pidStr)
-	cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid))
-	out, _ := cmd.Output()
-	if strings.Contains(string(out), pidStr) {
+	if isProcessRunning(pid) {
 		fmt.Printf("后台实例运行中: PID=%d\n", pid)
 	} else {
 		fmt.Printf("PID 文件存在 (%d) 但进程已不在（可能异常退出）\n", pid)
