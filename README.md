@@ -117,8 +117,6 @@ go build -ldflags="-s -w" -o pumc-net-auth .
 }
 ```
 
-> 💡 **提示**：标准 JSON 原生不支持注释，但本程序贴心地内置了注释自动过滤解析。即使你直接复制上方包含 `//` 注释的内容保存为 `config.json`，程序也能正常识别读取！
-> 
 > *配置文件亦可放置于 `~/.pumc-net-auth/config.json`。*
 
 ### 3. 命令行操作
