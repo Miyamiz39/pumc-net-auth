@@ -189,6 +189,7 @@ func daemonLoop(cfg Config) {
 			logMsg("  → 启动快速登录暂未成功，转入后台状态机持续监控")
 		}
 	}
+	trimMemory()
 
 	failCount := 0
 	var backoffUntil time.Time
@@ -219,6 +220,9 @@ func daemonLoop(cfg Config) {
 				logMsg(fmt.Sprintf("  → 网络正常，fail_count 清零（前值=%d）", failCount))
 			}
 			failCount = 0
+			if cycle%10 == 0 {
+				trimMemory()
+			}
 			time.Sleep(time.Duration(cfg.IntervalSeconds) * time.Second)
 			continue
 		}

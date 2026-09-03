@@ -3,8 +3,13 @@
 package main
 
 import (
+	"runtime/debug"
 	"syscall"
 )
+
+func trimMemory() {
+	debug.FreeOSMemory()
+}
 
 func killProcess(pid int) error {
 	return syscall.Kill(pid, syscall.SIGTERM)

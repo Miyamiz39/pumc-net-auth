@@ -5,10 +5,19 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
 )
+
+func trimMemory() {
+	debug.FreeOSMemory()
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	setWorkingSet := kernel32.NewProc("SetProcessWorkingSetSize")
+	handle, _, _ := kernel32.NewProc("GetCurrentProcess").Call()
+	_, _, _ = setWorkingSet.Call(handle, ^uintptr(0), ^uintptr(0))
+}
 
 func init() {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
