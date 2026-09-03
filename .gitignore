@@ -1,0 +1,22 @@
+# 配置文件（绝对不要提交真实学号密码）
+config.json
+
+# 编译二进制与临时输出
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.log
+*.log.*
+*.pid
+__pycache__/
+*.pyc
+
+# IDE 与操作系统忽略文件
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

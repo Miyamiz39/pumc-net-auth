@@ -1,0 +1,12 @@
+{
+  "username": "2024xxxxxx",
+  "password": "your_password_here",
+  "portal_host": "go.pumc.edu.cn",
+  "ac_id": 1,
+  "keepalive_target": "www.baidu.com",
+  "interval_seconds": 30,
+  "tcp_hold_seconds": 10,
+  "fail_threshold_relogin": 2,
+  "fail_threshold_backoff": 5,
+  "backoff_minutes": 5
+}
