@@ -69,6 +69,22 @@ def _find_config() -> Path:
     return candidates[0]
 
 
+def _strip_comments(text: str) -> str:
+    lines = text.splitlines()
+    clean = []
+    for line in lines:
+        in_str = False
+        idx = -1
+        for i, ch in enumerate(line):
+            if ch == '"' and (i == 0 or line[i - 1] != '\\'):
+                in_str = not in_str
+            elif not in_str and i + 1 < len(line) and line[i:i + 2] == "//":
+                idx = i
+                break
+        clean.append(line[:idx] if idx != -1 else line)
+    return "\n".join(clean)
+
+
 def load_config() -> dict:
     cfg_path = _find_config()
     if not cfg_path.exists():
@@ -80,7 +96,7 @@ def load_config() -> dict:
             f"请填入 username + password 后再运行。"
         )
     with open(cfg_path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
+        cfg = json.loads(_strip_comments(f.read()))
     # 补缺失字段
     for k, v in DEFAULT_CONFIG.items():
         cfg.setdefault(k, v)

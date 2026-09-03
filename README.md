@@ -101,12 +101,12 @@ go build -ldflags="-s -w" -o pumc-net-auth .
 
 在程序同目录下创建 `config.json`（参考 `config.example.json`）：
 
-```json
+```jsonc
 {
-  "username": "your_username", //用户名 (学号, etc.)
-  "password": "your_password", //密码 (明文保存所以千万注意文件保密！)
-  "portal_host": "portal.your-campus.edu.cn", //校园网认证页面的地址
-// 以下保持默认即可
+  "username": "your_username",       // 用户名 (学号, etc.)
+  "password": "your_password",       // 密码 (明文保存所以千万注意文件保密！)
+  "portal_host": "portal.your-campus.edu.cn", // 校园网认证页面的地址 (PUMC 为 go.pumc.edu.cn)
+  // --- 以下保持默认即可 ---
   "ac_id": 1,
   "keepalive_target": "www.baidu.com",
   "interval_seconds": 30,
@@ -117,7 +117,9 @@ go build -ldflags="-s -w" -o pumc-net-auth .
 }
 ```
 
-> *注：对于PUMC，`portal_host` 为 `go.pumc.edu.cn`。配置文件亦可放置于 `~/.pumc-net-auth/config.json`。*
+> 💡 **提示**：标准 JSON 原生不支持注释，但本程序贴心地内置了注释自动过滤解析。即使你直接复制上方包含 `//` 注释的内容保存为 `config.json`，程序也能正常识别读取！
+> 
+> *配置文件亦可放置于 `~/.pumc-net-auth/config.json`。*
 
 ### 3. 命令行操作
 

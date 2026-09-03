@@ -65,6 +65,30 @@ func findConfig() string {
 	return filepath.Join(exeDir, "config.json")
 }
 
+// stripJSONComments 移除 JSON 中的单行 // 注释（支持行内及整行注释，保护双引号内的 URL）
+func stripJSONComments(data []byte) []byte {
+	lines := strings.Split(string(data), "\n")
+	var cleanLines []string
+	for _, line := range lines {
+		inString := false
+		commentIdx := -1
+		for i := 0; i < len(line); i++ {
+			if line[i] == '"' && (i == 0 || line[i-1] != '\\') {
+				inString = !inString
+			} else if !inString && i+1 < len(line) && line[i] == '/' && line[i+1] == '/' {
+				commentIdx = i
+				break
+			}
+		}
+		if commentIdx != -1 {
+			cleanLines = append(cleanLines, line[:commentIdx])
+		} else {
+			cleanLines = append(cleanLines, line)
+		}
+	}
+	return []byte(strings.Join(cleanLines, "\n"))
+}
+
 func loadConfig() Config {
 	cfgPath := findConfig()
 	data, err := os.ReadFile(cfgPath)
@@ -76,7 +100,7 @@ func loadConfig() Config {
 		os.Exit(1)
 	}
 	cfg := defaultConfig
-	_ = json.Unmarshal(data, &cfg)
+	_ = json.Unmarshal(stripJSONComments(data), &cfg)
 	return cfg
 }
 
