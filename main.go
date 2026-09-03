@@ -115,17 +115,33 @@ func logMsg(msg string) {
 }
 
 func checkHTTP(target string) (bool, string) {
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// 阻止自动跟随跳转，精准识别 Captive Portal 302/301 劫持
+			return http.ErrUseLastResponse
+		},
+	}
 	resp, err := client.Head("http://" + target + "/")
 	if err != nil {
 		return false, fmt.Sprintf("HTTP 失败: %v", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return false, fmt.Sprintf("HTTP 遭遇网关劫持跳转 (状态码 %d)", resp.StatusCode)
+	}
+	if resp.StatusCode != 200 && resp.StatusCode != 204 {
+		return false, fmt.Sprintf("HTTP 状态异常: %d", resp.StatusCode)
+	}
 	return true, fmt.Sprintf("HTTP %d", resp.StatusCode)
 }
 
 func checkTCPHold(target string, holdSeconds int) (bool, string) {
-	conn, err := net.DialTimeout("tcp", target+":80", 8*time.Second)
+	if holdSeconds <= 0 {
+		return true, "TCP hold 跳过"
+	}
+	conn, err := net.DialTimeout("tcp", target+":80", 5*time.Second)
 	if err != nil {
 		return false, fmt.Sprintf("TCP 失败: %v", err)
 	}
@@ -134,10 +150,14 @@ func checkTCPHold(target string, holdSeconds int) (bool, string) {
 	return true, fmt.Sprintf("TCP hold %ds OK", holdSeconds)
 }
 
-func doKeepalive(cfg Config) (bool, bool, string) {
+func doKeepalive(cfg Config) (bool, string) {
 	httpOk, httpMsg := checkHTTP(cfg.KeepaliveTarget)
-	tcpOk, tcpMsg := checkTCPHold(cfg.KeepaliveTarget, cfg.TCPHoldSeconds)
-	return httpOk, tcpOk, fmt.Sprintf("%s | %s", httpMsg, tcpMsg)
+	if !httpOk {
+		return false, httpMsg
+	}
+	// 仅在公网 HTTP 确实通畅时，才执行 TCP hold 进行会话保活
+	_, tcpMsg := checkTCPHold(cfg.KeepaliveTarget, cfg.TCPHoldSeconds)
+	return true, fmt.Sprintf("%s | %s", httpMsg, tcpMsg)
 }
 
 func daemonLoop(cfg Config) {
@@ -148,6 +168,27 @@ func daemonLoop(cfg Config) {
 	logMsg(fmt.Sprintf("  username=%s  host=%s  ac_id=%d", cfg.Username, cfg.PortalHost, cfg.AcID))
 	logMsg(fmt.Sprintf("  间隔 %ds / TCP hold %ds / 失败 %d 次重登 / %d 次退避 %dmin",
 		cfg.IntervalSeconds, cfg.TCPHoldSeconds, cfg.FailThresholdRelogin, cfg.FailThresholdBackoff, cfg.BackoffMinutes))
+
+	// [冷启动检查] 开机或程序启动时立即检查并重登，无需等待保活周期轮询
+	logMsg("[启动检查] 探测当前校园网在线状态...")
+	if checkOnline(cfg.PortalHost) {
+		logMsg("  → 当前已在线，直接进入后台保活")
+	} else {
+		logMsg("  → 当前未在线，立即发起登录认证...")
+		logged := false
+		for attempt := 1; attempt <= 3; attempt++ {
+			success, msg := login(cfg.PortalHost, cfg.Username, cfg.Password, cfg.AcID, "")
+			logMsg(fmt.Sprintf("  → 启动登录结果 (尝试 %d/3): %s", attempt, msg))
+			if success {
+				logged = true
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+		if !logged {
+			logMsg("  → 启动快速登录暂未成功，转入后台状态机持续监控")
+		}
+	}
 
 	failCount := 0
 	var backoffUntil time.Time
@@ -166,17 +207,16 @@ func daemonLoop(cfg Config) {
 			continue
 		}
 
-		httpOk, tcpOk, detail := doKeepalive(cfg)
-		cycleOk := httpOk || tcpOk
+		cycleOk, detail := doKeepalive(cfg)
 		status := "FAIL"
 		if cycleOk {
 			status = "OK"
 		}
-		logMsg(fmt.Sprintf("[循环 %d] %s  http=%v  tcp=%v  %s", cycle, status, httpOk, tcpOk, detail))
+		logMsg(fmt.Sprintf("[循环 %d] %s  %s", cycle, status, detail))
 
 		if cycleOk {
 			if failCount > 0 {
-				logMsg(fmt.Sprintf("  → 网络恢复，fail_count 清零（前值=%d）", failCount))
+				logMsg(fmt.Sprintf("  → 网络正常，fail_count 清零（前值=%d）", failCount))
 			}
 			failCount = 0
 			time.Sleep(time.Duration(cfg.IntervalSeconds) * time.Second)
@@ -186,20 +226,30 @@ func daemonLoop(cfg Config) {
 		failCount++
 		logMsg(fmt.Sprintf("  → 失败 #%d", failCount))
 
+		// 首次探测失败快速复检（3 秒后复查，排除瞬时丢包，避免干等整整一个 interval）
 		if failCount < cfg.FailThresholdRelogin {
-			time.Sleep(time.Duration(cfg.IntervalSeconds) * time.Second)
-			continue
+			logMsg("  → 探测失败，等待 3s 快速复检...")
+			time.Sleep(3 * time.Second)
+			recheckOk, recheckDetail := doKeepalive(cfg)
+			if recheckOk {
+				logMsg(fmt.Sprintf("  → 快速复检通过 (%s)，判定为瞬时抖动，清零", recheckDetail))
+				failCount = 0
+				time.Sleep(time.Duration(cfg.IntervalSeconds) * time.Second)
+				continue
+			}
+			failCount++
+			logMsg(fmt.Sprintf("  → 快速复检依然失败 (%s)，确认掉线 (#%d)", recheckDetail, failCount))
 		}
 
-		logMsg(fmt.Sprintf("  → 触发重登（已连续失败 %d 次）", failCount))
+		logMsg("  → 触发重登（已确认掉线）")
 		if checkOnline(cfg.PortalHost) {
-			logMsg("  → rad_user_info 显示已在线（网络临时波动），清零")
+			logMsg("  → rad_user_info 显示已在线（公网临时故障），清零")
 			failCount = 0
 			time.Sleep(time.Duration(cfg.IntervalSeconds) * time.Second)
 			continue
 		}
 
-		logMsg(fmt.Sprintf("  → 未在线，开始登录 %s ...", cfg.PortalHost))
+		logMsg(fmt.Sprintf("  → 网关确认离线，开始登录 %s ...", cfg.PortalHost))
 		success, msg := login(cfg.PortalHost, cfg.Username, cfg.Password, cfg.AcID, "")
 		logMsg(fmt.Sprintf("  → 登录结果：%s", msg))
 
@@ -207,7 +257,6 @@ func daemonLoop(cfg Config) {
 			logMsg("  → 重登成功，回到保活模式")
 			failCount = 0
 		} else {
-			failCount++
 			if failCount >= cfg.FailThresholdBackoff {
 				logMsg(fmt.Sprintf("  → 连续 %d 次失败，进入退避 %d 分钟", failCount, cfg.BackoffMinutes))
 				backoffUntil = time.Now().Add(time.Duration(cfg.BackoffMinutes) * time.Minute)

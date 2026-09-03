@@ -136,18 +136,35 @@ def log(msg: str):
 # 保活监测：HTTP HEAD + TCP hold
 # ========================================================================
 
-def check_http(url: str, timeout: int = 8) -> tuple[bool, str]:
-    """HEAD 请求检查 URL 可达性"""
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def check_http(url: str, timeout: int = 5) -> tuple[bool, str]:
+    """HEAD 请求检查 URL 可达性，拦截 302 劫持跳转"""
     try:
         req = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return True, f"HTTP {resp.status}"
+        opener = urllib.request.build_opener(NoRedirectHandler)
+        with opener.open(req, timeout=timeout) as resp:
+            code = resp.status
+            if 300 <= code < 400:
+                return False, f"HTTP 遭遇网关跳转 ({code})"
+            if code not in (200, 204):
+                return False, f"HTTP 状态异常: {code}"
+            return True, f"HTTP {code}"
+    except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            return False, f"HTTP 遭遇网关跳转 ({e.code})"
+        return False, f"HTTP 错误：{e.code}"
     except Exception as e:
         return False, f"HTTP 失败：{type(e).__name__}: {e}"
 
 
-def check_tcp_hold(host: str, port: int, hold_seconds: float, timeout: int = 8) -> tuple[bool, str]:
-    """建立 TCP 连接并 hold 住指定秒数"""
+def check_tcp_hold(host: str, port: int, hold_seconds: float, timeout: int = 5) -> tuple[bool, str]:
+    """建立 TCP 连接并 hold 住指定秒数进行会话保活"""
+    if hold_seconds <= 0:
+        return True, "TCP hold 跳过"
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
         sock.settimeout(timeout)
@@ -158,14 +175,14 @@ def check_tcp_hold(host: str, port: int, hold_seconds: float, timeout: int = 8) 
         return False, f"TCP 失败：{type(e).__name__}: {e}"
 
 
-def do_keepalive_check(cfg: dict) -> tuple[bool, bool, str]:
-    """执行一次保活检查
-    返回 (http_ok, tcp_ok, detail)"""
+def do_keepalive_check(cfg: dict) -> tuple[bool, str]:
+    """执行一次保活检查：仅公网 HTTP 成功时才判定在线，并执行 TCP hold"""
     target = cfg["keepalive_target"]
-    http_ok, http_msg = check_http(f"http://{target}/", timeout=8)
-    tcp_ok, tcp_msg = check_tcp_hold(target, 80, cfg["tcp_hold_seconds"], timeout=8)
-    detail = f"{http_msg} | {tcp_msg}"
-    return http_ok, tcp_ok, detail
+    http_ok, http_msg = check_http(f"http://{target}/", timeout=5)
+    if not http_ok:
+        return False, http_msg
+    _, tcp_msg = check_tcp_hold(target, 80, cfg["tcp_hold_seconds"], timeout=5)
+    return True, f"{http_msg} | {tcp_msg}"
 
 
 # ========================================================================
@@ -186,6 +203,29 @@ def daemon_loop(cfg: dict):
     log(f"  username={cfg['username']}  host={cfg['portal_host']}  ac_id={cfg['ac_id']}")
     log(f"  间隔 {interval}s / TCP hold {cfg['tcp_hold_seconds']}s / 失败 {fail_threshold} 次重登 / {backoff_threshold} 次退避 {cfg['backoff_minutes']}min")
 
+    # [冷启动检查] 开机或启动立刻检查，离线立刻登录
+    log("[启动检查] 探测当前校园网在线状态...")
+    if auth.check_online(cfg["portal_host"]):
+        log("  → 当前已在线，直接进入后台保活")
+    else:
+        log("  → 当前未在线，立即发起登录认证...")
+        logged = False
+        for attempt in range(1, 4):
+            success, msg = auth.login(
+                cfg["portal_host"],
+                cfg["username"],
+                cfg["password"],
+                ac_id=cfg["ac_id"],
+                client_ip=cfg.get("client_ip", "0.0.0.0"),
+            )
+            log(f"  → 启动登录结果 (尝试 {attempt}/3): {msg}")
+            if success:
+                logged = True
+                break
+            time.sleep(2)
+        if not logged:
+            log("  → 启动快速登录暂未成功，转入后台状态机持续重试")
+
     fail_count = 0
     backoff_until = 0.0
     cycle = 0
@@ -204,15 +244,13 @@ def daemon_loop(cfg: dict):
                 continue
 
             # 保活检查
-            http_ok, tcp_ok, detail = do_keepalive_check(cfg)
-            cycle_ok = http_ok or tcp_ok
+            cycle_ok, detail = do_keepalive_check(cfg)
             status = "OK" if cycle_ok else "FAIL"
-            log(f"[循环 {cycle}] {status}  http={http_ok}  tcp={tcp_ok}  {detail}")
+            log(f"[循环 {cycle}] {status}  {detail}")
 
             if cycle_ok:
-                # 任一成功就算通
                 if fail_count > 0:
-                    log(f"  → 网络恢复，fail_count 清零（前值={fail_count}）")
+                    log(f"  → 网络正常，fail_count 清零（前值={fail_count}）")
                 fail_count = 0
                 time.sleep(interval)
                 continue
@@ -221,16 +259,24 @@ def daemon_loop(cfg: dict):
             fail_count += 1
             log(f"  → 失败 #{fail_count}")
 
+            # 首次失败快速 3 秒复查
             if fail_count < fail_threshold:
-                # 还没到重登门槛
-                time.sleep(interval)
-                continue
+                log("  → 探测失败，等待 3s 快速复检...")
+                time.sleep(3)
+                recheck_ok, recheck_detail = do_keepalive_check(cfg)
+                if recheck_ok:
+                    log(f"  → 快速复检通过 ({recheck_detail})，判定为瞬时抖动，清零")
+                    fail_count = 0
+                    time.sleep(interval)
+                    continue
+                fail_count += 1
+                log(f"  → 快速复检依然失败 ({recheck_detail})，确认掉线 (#{fail_count})")
 
-            # 到了 fail_threshold：先查在线状态，避免重复登录
-            log(f"  → 触发重登（已连续失败 {fail_count} 次）")
+            # 确认掉线：先查在线状态，避免重复登录
+            log(f"  → 触发重登（已确认掉线）")
             is_online = auth.check_online(cfg["portal_host"])
             if is_online:
-                log(f"  → rad_user_info 显示已在线（其实是网络临时抽风），清零")
+                log(f"  → rad_user_info 显示已在线（公网临时故障），清零")
                 fail_count = 0
                 time.sleep(interval)
                 continue
